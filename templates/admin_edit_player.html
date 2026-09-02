@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Player — IPL Auction{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- LEFT COLUMN (Edit Player Form) -->
+  <div class="col-md-5">
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-link mb-3">&larr; Back to Admin Dashboard</a>
+    <div class="card p-4 shadow-sm">
+      <h4 class="mb-3">✏️ Edit Player</h4>
+      <form method="POST">
+        <div class="mb-3">
+          <label class="form-label">Player Name</label>
+          <input name="player_name" class="form-control" value="{{ player.player_name }}" required>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Role</label>
+          <input name="role" class="form-control" value="{{ player.role }}" required>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Team</label>
+          <select name="team" class="form-select" required>
+            {% for t in teams %}
+              <option value="{{ t }}" 
+                      {% if player.team == t %}selected{% endif %}
+                      class="team-option team-{{ t|lower|replace(' ', '-') }}">
+                {{ t }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Price (₹)</label>
+          <input name="bid_price" type="number" class="form-control" value="{{ player.bid_price }}" required>
+        </div>
+
+        <button class="btn btn-primary w-100">Save Changes</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN (Live Dashboard) -->
+  <div class="col-md-7">
+    <!-- You can reuse the dashboard cards here -->
+    <div class="card p-3 mb-4">
+      <h5 class="mb-3">💰 Teams Budgets</h5>
+      {% for t in teams_data %}
+        <div class="border-bottom pb-2 mb-2">
+          <strong>{{ t.team_name }}</strong><br>
+          <small>Total: ₹{{ t.total_budget }} | Spent: ₹{{ t.total_spent }} | Remaining: ₹{{ t.remaining_budget }}</small>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="card p-3">
+      <h5 class="mb-3">📋 All Players</h5>
+      {% if players %}
+        <div class="table-responsive">
+          <table class="table table-hover align-middle">
+            <thead class="table-dark">
+              <tr>
+                <th>Player</th>
+                <th>Role</th>
+                <th>Team</th>
+                <th>Price</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in players %}
+                <tr>
+                  <td>{{ p.player_name }}</td>
+                  <td>{{ p.role }}</td>
+                  <td>{{ p.team }}</td>
+                  <td>₹{{ p.bid_price }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="text-muted">No players available.</p>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

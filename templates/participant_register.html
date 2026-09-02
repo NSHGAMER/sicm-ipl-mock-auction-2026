@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Participant Registration{% endblock %}
+
+{% block content %}
+<div class="container py-5" style="max-width: 500px;">
+  <a href="{{ url_for('index') }}" class="btn btn-link mb-3">&larr; Back</a>
+  <div class="card p-4 shadow-sm rounded-4">
+    <h4 class="mb-3 text-center">📝 Register</h4>
+    <form method="POST">
+      
+      <!-- Name -->
+      <div class="mb-3">
+        <label class="form-label">Name</label>
+        <input name="name" class="form-control" placeholder="Enter your name" required>
+      </div>
+
+      <!-- College -->
+      <div class="mb-3">
+        <label class="form-label">College</label>
+        <input name="college" class="form-control" placeholder="Enter your college" required>
+      </div>
+
+      <!-- Team Selection -->
+      <div class="mb-3">
+        <label class="form-label">Team</label>
+        <select name="team" class="form-select" required>
+          <option value="">Choose your team</option>
+          {% for t in teams %}
+            <option value="{{ t }}">{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Password -->
+      <div class="mb-3">
+        <label class="form-label">Password</label>
+        <input type="password" name="password" class="form-control" placeholder="Set a password" required>
+      </div>
+
+      <button class="btn btn-primary w-100">Register</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
