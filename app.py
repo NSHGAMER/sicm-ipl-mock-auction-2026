@@ -1,5 +1,7 @@
 import os
 import uuid
+import math
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
@@ -331,18 +333,56 @@ def admin_dashboard():
 @admin_required
 def add_player():
     try:
+        name = request.form.get('name', '').strip()
+        role = request.form.get('role', '').strip()
+        nationality = request.form.get('nationality', '').strip() or None
+
+        if not name:
+            raise ValueError('Player name is required.')
+        if role not in ROLES:
+            raise ValueError('Invalid player role.')
+
+        raw_price = (request.form.get('base_price') or request.form.get('base_price_crore') or '').strip()
+        if not raw_price:
+            raise ValueError('Base price is required.')
+
+        try:
+            crore_val = float(raw_price)
+        except (ValueError, TypeError):
+            raise ValueError('Base price must be a valid number.')
+
+        if math.isnan(crore_val) or math.isinf(crore_val):
+            raise ValueError('Invalid base price value.')
+        if crore_val <= 0:
+            raise ValueError('Base price must be greater than 0 Cr.')
+        if crore_val > 100:
+            raise ValueError('Base price cannot exceed 100 Cr.')
+
+        try:
+            base_price_rupees = int(round(Decimal(raw_price) * Decimal(10_000_000)))
+        except (InvalidOperation, ValueError):
+            base_price_rupees = int(round(crore_val * 10_000_000))
+
+        if base_price_rupees <= 0:
+            raise ValueError('Base price in rupees must be greater than 0.')
+
+        # Automatically assign MAX(auction_order) + 1, or 1 if no players
+        order_res = supabase.table('players').select('auction_order').order('auction_order', desc=True).limit(1).execute()
+        if order_res.data and len(order_res.data) > 0 and order_res.data[0].get('auction_order') is not None:
+            next_order = int(order_res.data[0]['auction_order']) + 1
+        else:
+            next_order = 1
+
         payload = {
-            'name': request.form.get('name', '').strip(),
-            'role': request.form.get('role', ''),
-            'nationality': request.form.get('nationality', '').strip() or None,
-            'base_price': int(request.form.get('base_price', '0') or 0),
-            'photo_url': request.form.get('photo_url', '').strip() or None,
-            'notes': request.form.get('notes', '').strip() or None,
-            'auction_order': int(request.form.get('auction_order', '0') or 0),
+            'name': name,
+            'role': role,
+            'nationality': nationality,
+            'base_price': base_price_rupees,
+            'photo_url': None,
+            'notes': None,
+            'auction_order': next_order,
             'is_available': True
         }
-        if not payload['name'] or payload['role'] not in ROLES:
-            raise ValueError('Invalid player details')
         supabase.table('players').insert(payload).execute()
         flash('Player added.', 'success')
     except Exception as e:

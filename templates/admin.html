@@ -1,1 +1,130 @@
-{% extends 'base.html' %}{% block title %}Admin Control Room • SICM{% endblock %}{% block content %}<div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4"><div><span class="eyebrow"><span class="pulse"></span> Organizer only</span><h1 class="fw-bold mt-2 mb-1" style="letter-spacing:-.05em">Control Room</h1><div class="mini-note">Manage players, live display and final auction results.</div></div><a class="btn btn-ghost" href="{{url_for('home')}}">Open Public Display ↗</a></div><div class="admin-grid"><div class="sticky-panel"><div class="card p-4"><div class="eyebrow">Player setup</div><h4 class="fw-bold mt-3">Add player</h4><form method="post" action="{{url_for('add_player')}}" class="mt-3"><label class="form-label">Player name</label><input name="name" class="form-control mb-2" placeholder="e.g. Player Name" required><label class="form-label">Role</label><select name="role" class="form-select mb-2" required>{% for r in roles %}<option>{{r}}</option>{% endfor %}</select><label class="form-label">Nationality</label><input name="nationality" class="form-control mb-2" placeholder="Optional"><label class="form-label">Base price (₹)</label><input name="base_price" type="number" class="form-control mb-2" placeholder="5000000" min="0"><label class="form-label">Photo URL</label><input name="photo_url" class="form-control mb-2" placeholder="Optional"><label class="form-label">Auction order</label><input name="auction_order" type="number" class="form-control mb-2" placeholder="1"><textarea name="notes" class="form-control mb-3" placeholder="Notes / player details"></textarea><button class="btn btn-primary w-100">+ Add player</button></form></div></div><div><div class="row g-3 mb-3">{% for t in teams %}<div class="col-6 col-xl-3"><div class="card p-3"><div class="d-flex justify-content-between"><strong>{{t.code}}</strong><span class="chip">{{t.max_squad_size}}</span></div><div class="mt-2 fw-bold">{{t.wallet_balance|money}}</div><div class="mini-note">Wallet remaining</div></div></div>{% endfor %}</div><div class="card p-4"><div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h4 class="section-title mb-1">Players & sale control</h4><div class="mini-note">Set a player live, then record the final physical auction result.</div></div><span class="chip">{{players|length}} total</span></div><div class="table-responsive"><table class="table align-middle"><thead><tr><th>Player</th><th>Role</th><th>Status</th><th style="min-width:420px">Control</th></tr></thead><tbody>{% for p in players %}<tr><td><strong>{{p.name}}</strong><div class="mini-note">Base {{p.base_price|money}}</div></td><td>{{p.role}}</td><td>{% if p.is_available %}<span class="status status-available">AVAILABLE</span>{% else %}<span class="status status-sold">SOLD</span>{% endif %}</td><td>{% if p.is_available %}<div class="d-flex flex-wrap gap-2"><form method="post" action="{{url_for('set_live',player_id=p.id)}}"><button class="btn btn-sm btn-ghost">LIVE</button></form><form method="post" action="{{url_for('sold',player_id=p.id)}}" class="d-flex flex-wrap gap-2"><select name="team" class="form-select form-select-sm" style="width:100px" required><option value="">Team</option>{% for t in teams %}<option value="{{t.code}}">{{t.code}}</option>{% endfor %}</select><select name="price" class="form-select form-select-sm" style="width:115px"><option value="">Price</option>{% for value,label in prices %}<option value="{{value}}">{{label}}</option>{% endfor %}</select><input name="custom_price" type="number" min="1" class="form-control form-control-sm" style="width:125px" placeholder="Custom ₹"><button class="btn btn-sm btn-primary">MARK SOLD</button></form><form method="post" action="{{url_for('delete_player',player_id=p.id)}}"><button class="btn btn-sm btn-outline-danger">Delete</button></form></div>{% endif %}</td></tr>{% else %}<tr><td colspan="4" class="empty">No players yet. Add the first player from the panel.</td></tr>{% endfor %}</tbody></table></div></div></div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Admin Control Room • SICM{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+  <div>
+    <span class="eyebrow"><span class="pulse"></span> Organizer only</span>
+    <h1 class="fw-bold mt-2 mb-1" style="letter-spacing:-.05em">Control Room</h1>
+    <div class="mini-note">Manage players, live display and final auction results.</div>
+  </div>
+  <a class="btn btn-ghost" href="{{url_for('home')}}">Open Public Display ↗</a>
+</div>
+
+<div class="admin-grid">
+  <div class="sticky-panel">
+    <div class="card p-4">
+      <div class="eyebrow">Player setup</div>
+      <h4 class="fw-bold mt-3">Add player</h4>
+      <form method="post" action="{{url_for('add_player')}}" class="mt-3">
+        <label class="form-label" for="player_name">Player name</label>
+        <input id="player_name" name="name" class="form-control mb-2" placeholder="e.g. Player Name" required>
+
+        <label class="form-label" for="player_role">Role</label>
+        <select id="player_role" name="role" class="form-select mb-2" required>
+          {% for r in roles %}<option>{{r}}</option>{% endfor %}
+        </select>
+
+        <label class="form-label" for="player_nationality">Nationality</label>
+        <input id="player_nationality" name="nationality" class="form-control mb-2" placeholder="Optional">
+
+        <label class="form-label" for="base_price">Base Price</label>
+        <div class="input-group mb-1">
+          <input id="base_price" name="base_price" type="number" step="any" min="0.01" max="100" class="form-control" placeholder="0.1" inputmode="decimal" required>
+          <span class="input-group-text">Cr</span>
+        </div>
+        <div class="mini-note mb-3">
+          Enter base price in Crores (e.g. 0.1 = ₹10,00,000)
+        </div>
+
+        <button class="btn btn-primary w-100">+ Add player</button>
+      </form>
+    </div>
+  </div>
+
+  <div>
+    <div class="row g-3 mb-3">
+      {% for t in teams %}
+      <div class="col-6 col-xl-3">
+        <div class="card p-3">
+          <div class="d-flex justify-content-between">
+            <strong>{{t.code}}</strong>
+            <span class="chip">{{t.max_squad_size}}</span>
+          </div>
+          <div class="mt-2 fw-bold">{{t.wallet_balance|money}}</div>
+          <div class="mini-note">Wallet remaining</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+          <h4 class="section-title mb-1">Players & sale control</h4>
+          <div class="mini-note">Set a player live, then record the final physical auction result.</div>
+        </div>
+        <span class="chip">{{players|length}} total</span>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th style="min-width:420px">Control</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in players %}
+            <tr>
+              <td>
+                <strong>{{p.name}}</strong>
+                <div class="mini-note">Base {{p.base_price|money}}</div>
+              </td>
+              <td>{{p.role}}</td>
+              <td>
+                {% if p.is_available %}
+                <span class="status status-available">AVAILABLE</span>
+                {% else %}
+                <span class="status status-sold">SOLD</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if p.is_available %}
+                <div class="d-flex flex-wrap gap-2">
+                  <form method="post" action="{{url_for('set_live',player_id=p.id)}}">
+                    <button class="btn btn-sm btn-ghost">LIVE</button>
+                  </form>
+                  <form method="post" action="{{url_for('sold',player_id=p.id)}}" class="d-flex flex-wrap gap-2">
+                    <select name="team" class="form-select form-select-sm" style="width:100px" required>
+                      <option value="">Team</option>
+                      {% for t in teams %}<option value="{{t.code}}">{{t.code}}</option>{% endfor %}
+                    </select>
+                    <select name="price" class="form-select form-select-sm" style="width:115px">
+                      <option value="">Price</option>
+                      {% for value,label in prices %}<option value="{{value}}">{{label}}</option>{% endfor %}
+                    </select>
+                    <input name="custom_price" type="number" min="1" class="form-control form-control-sm" style="width:125px" placeholder="Custom ₹">
+                    <button class="btn btn-sm btn-primary">MARK SOLD</button>
+                  </form>
+                  <form method="post" action="{{url_for('delete_player',player_id=p.id)}}">
+                    <button class="btn btn-sm btn-outline-danger">Delete</button>
+                  </form>
+                </div>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="4" class="empty">No players yet. Add the first player from the panel.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
