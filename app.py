@@ -400,6 +400,7 @@ def admin_login():
 @admin_required
 def admin_dashboard():
     try:
+        players = supabase.table('players').select('*').order('auction_order', desc=False).execute().data or []
         teams = supabase.table('teams').select('*').order('code').execute().data or []
         ref_players = supabase.table('auction_reference_players').select('*').order('auction_order', desc=False).execute().data or []
         purchases = supabase.table('purchases').select('id,player_id,team_id,sold_price,sold_at').order('sold_at', desc=True).execute().data or []
@@ -432,8 +433,8 @@ def admin_dashboard():
         state_res = supabase.table('auction_state').select('*').eq('id', True).single().execute()
         state = state_res.data if state_res else {'id': True, 'is_live': False, 'current_player_id': None}
     except Exception:
-        teams, ref_players, enriched_purchases, participants, state = [], [], [], [], {'id': True, 'is_live': False, 'current_player_id': None}
-    return render_template('admin.html', teams=teams, ref_players=ref_players, purchases=enriched_purchases, participants=participants, state=state, roles=ROLES)
+        players, teams, ref_players, enriched_purchases, participants, state = [], [], [], [], [], {'id': True, 'is_live': False, 'current_player_id': None}
+    return render_template('admin.html', players=players, teams=teams, ref_players=ref_players, purchases=enriched_purchases, participants=participants, state=state, roles=ROLES, prices=PRICE_OPTIONS)
 
 
 @app.post('/admin/reference/upload')
@@ -524,20 +525,19 @@ def upload_reference_list():
         for i in range(0, len(parsed_players), batch_size):
             supabase.table('auction_reference_players').insert(parsed_players[i:i+batch_size]).execute()
 
-        flash(f'Successfully updated reference list with {len(parsed_players)} players.', 'success')
+        flash(f'Reference list updated with {len(parsed_players)} players.', 'success')
     except Exception as e:
-        flash(f'Reference list upload failed: {str(e)}. Existing reference list was NOT changed.', 'danger')
+        flash(f'Reference upload failed: {str(e)}', 'danger')
     return redirect(url_for('admin_dashboard'))
 
 
 @app.post('/admin/sale/manual')
-@app.post('/admin/player/add')
 @admin_required
 def manual_sale():
     name = request.form.get('name', '').strip()
     role = request.form.get('role', '').strip()
     team = request.form.get('team', '').strip().upper()
-    raw_sold_price = (request.form.get('sold_price') or request.form.get('base_price') or '').strip()
+    raw_sold_price = (request.form.get('sold_price') or '').strip()
 
     try:
         if not name:
@@ -647,6 +647,66 @@ def manual_sale():
             flash('Invalid sale price.', 'danger')
         else:
             flash(f'Error recording sale: {err}', 'danger')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.post('/admin/player/add')
+@admin_required
+def add_player():
+    try:
+        name = request.form.get('name', '').strip()
+        role = request.form.get('role', '').strip()
+        nationality = request.form.get('nationality', '').strip() or None
+
+        if not name:
+            raise ValueError('Player name is required.')
+        if role not in ROLES:
+            raise ValueError('Invalid player role.')
+
+        raw_price = (request.form.get('base_price') or request.form.get('base_price_crore') or '').strip()
+        if not raw_price:
+            raise ValueError('Base price is required.')
+
+        try:
+            crore_val = float(raw_price)
+        except (ValueError, TypeError):
+            raise ValueError('Base price must be a valid number.')
+
+        if math.isnan(crore_val) or math.isinf(crore_val):
+            raise ValueError('Invalid base price value.')
+        if crore_val <= 0:
+            raise ValueError('Base price must be greater than 0 Cr.')
+        if crore_val > 100:
+            raise ValueError('Base price cannot exceed 100 Cr.')
+
+        try:
+            base_price_rupees = int(round(Decimal(raw_price) * Decimal(10_000_000)))
+        except (InvalidOperation, ValueError):
+            base_price_rupees = int(round(crore_val * 10_000_000))
+
+        if base_price_rupees <= 0:
+            raise ValueError('Base price in rupees must be greater than 0.')
+
+        order_res = supabase.table('players').select('auction_order').order('auction_order', desc=True).limit(1).execute()
+        if order_res.data and len(order_res.data) > 0 and order_res.data[0].get('auction_order') is not None:
+            next_order = int(order_res.data[0]['auction_order']) + 1
+        else:
+            next_order = 1
+
+        payload = {
+            'name': name,
+            'role': role,
+            'nationality': nationality,
+            'base_price': base_price_rupees,
+            'photo_url': None,
+            'notes': None,
+            'auction_order': next_order,
+            'is_available': True
+        }
+        supabase.table('players').insert(payload).execute()
+        flash('Player added for live auction.', 'success')
+    except Exception as e:
+        flash(safe_error(e), 'danger')
     return redirect(url_for('admin_dashboard'))
 
 

@@ -12,10 +12,10 @@
 
 <div class="admin-grid">
   <div class="sticky-panel">
-    <!-- MANUAL SALE -->
+    <!-- RECORD AUCTION SALE -->
     <div class="card p-4">
       <div class="eyebrow">Manual Sale</div>
-      <h4 class="fw-bold mt-2">Record Sale</h4>
+      <h4 class="fw-bold mt-2">Record Auction Sale</h4>
       <form method="post" action="{{url_for('manual_sale')}}" class="mt-3">
         <label class="form-label" for="player_name">Player Name</label>
         <input id="player_name" name="name" class="form-control mb-2" placeholder="e.g. Virat Kohli" required>
@@ -25,7 +25,7 @@
           {% for r in roles %}<option value="{{r}}">{{r}}</option>{% endfor %}
         </select>
 
-        <label class="form-label" for="purchasing_team">Team (Purchasing)</label>
+        <label class="form-label" for="purchasing_team">Team</label>
         <select id="purchasing_team" name="team" class="form-select mb-2" required>
           <option value="">Select Team</option>
           {% for t in teams %}<option value="{{t.code}}">{{t.code}} - {{t.name}}</option>{% endfor %}
@@ -37,24 +37,53 @@
           <span class="input-group-text">Cr</span>
         </div>
         <div class="mini-note mb-3">
-          Enter sold price in Crores (e.g. 8 = ₹8.00 Cr, 0.5 = ₹50.00 L)
+          Enter sold price in Crores (e.g. 8 = ₹8.00 Cr, 8.5 = ₹8.50 Cr, 0.5 = ₹50.00 L)
         </div>
 
         <button class="btn btn-primary w-100">Record Sale</button>
       </form>
     </div>
 
-    <!-- UPLOAD AUCTION REFERENCE LIST -->
+    <!-- REFERENCE PLAYER LIST UPLOAD -->
     <div class="card p-4 mt-3">
-      <div class="eyebrow">Reference Pool</div>
-      <h4 class="fw-bold mt-2">Upload Reference List</h4>
+      <div class="eyebrow">Reference List</div>
+      <h4 class="fw-bold mt-2">Reference Player List</h4>
       <form method="post" action="{{url_for('upload_reference_list')}}" enctype="multipart/form-data" class="mt-3">
-        <label class="form-label" for="ref_file">Excel (.xlsx) or CSV (.csv)</label>
+        <label class="form-label" for="ref_file">Upload Excel (.xlsx) / CSV (.csv)</label>
         <input id="ref_file" name="file" type="file" accept=".xlsx,.csv" class="form-control mb-2" required>
         <div class="mini-note mb-3">
           Columns: <code>Player Name</code> | <code>Role</code> | <code>Team</code> | <code>Base Price</code>
         </div>
         <button class="btn btn-ghost w-100">Upload Reference List</button>
+      </form>
+    </div>
+
+    <!-- ADD PLAYER FOR LIVE AUCTION -->
+    <div class="card p-4 mt-3">
+      <div class="eyebrow">Live Auction Pool</div>
+      <h4 class="fw-bold mt-2">Add Live Player</h4>
+      <form method="post" action="{{url_for('add_player')}}" class="mt-3">
+        <label class="form-label" for="live_player_name">Player Name</label>
+        <input id="live_player_name" name="name" class="form-control mb-2" placeholder="e.g. Player Name" required>
+
+        <label class="form-label" for="live_player_role">Role</label>
+        <select id="live_player_role" name="role" class="form-select mb-2" required>
+          {% for r in roles %}<option value="{{r}}">{{r}}</option>{% endfor %}
+        </select>
+
+        <label class="form-label" for="live_player_nationality">Nationality</label>
+        <input id="live_player_nationality" name="nationality" class="form-control mb-2" placeholder="Optional">
+
+        <label class="form-label" for="live_base_price">Base Price</label>
+        <div class="input-group mb-1">
+          <input id="live_base_price" name="base_price" type="number" step="any" min="0.01" max="100" class="form-control" placeholder="0.2" inputmode="decimal" required>
+          <span class="input-group-text">Cr</span>
+        </div>
+        <div class="mini-note mb-3">
+          Enter base price in Crores (e.g. 0.2 = ₹20,00,000)
+        </div>
+
+        <button class="btn btn-ghost w-100">+ Add Player</button>
       </form>
     </div>
   </div>
@@ -89,12 +118,80 @@
     </div>
     {% endif %}
 
+    <!-- LIVE AUCTION & PLAYER CONTROLS TABLE -->
+    {% if players %}
+    <div class="card p-4 mb-3">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+          <h4 class="section-title mb-1">Live Auction Players & Controls</h4>
+          <div class="mini-note">Put players LIVE on participant screens or mark them sold in real time.</div>
+        </div>
+        <span class="chip">{{players|length}} players</span>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th style="min-width:420px">Control</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in players %}
+            <tr>
+              <td>
+                <strong>{{p.name}}</strong>
+                <div class="mini-note">Base {{p.base_price|money}}</div>
+              </td>
+              <td>{{p.role}}</td>
+              <td>
+                {% if p.is_available %}
+                <span class="status status-available">AVAILABLE</span>
+                {% else %}
+                <span class="status status-sold">SOLD</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if p.is_available %}
+                <div class="d-flex flex-wrap gap-2">
+                  <form method="post" action="{{url_for('set_live',player_id=p.id)}}">
+                    <button class="btn btn-sm btn-ghost">LIVE</button>
+                  </form>
+                  <form method="post" action="{{url_for('sold',player_id=p.id)}}" class="d-flex flex-wrap gap-2">
+                    <select name="team" class="form-select form-select-sm" style="width:100px" required>
+                      <option value="">Team</option>
+                      {% for t in teams %}<option value="{{t.code}}">{{t.code}}</option>{% endfor %}
+                    </select>
+                    <select name="price" class="form-select form-select-sm" style="width:115px">
+                      <option value="">Price</option>
+                      {% for value,label in prices %}<option value="{{value}}">{{label}}</option>{% endfor %}
+                    </select>
+                    <input name="custom_price" type="number" min="1" class="form-control form-control-sm" style="width:125px" placeholder="Custom ₹">
+                    <button class="btn btn-sm btn-primary">MARK SOLD</button>
+                  </form>
+                  <form method="post" action="{{url_for('delete_player',player_id=p.id)}}">
+                    <button class="btn btn-sm btn-outline-danger">Delete</button>
+                  </form>
+                </div>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- RECORDED PURCHASES -->
     <div class="card p-4 mb-3">
       <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
-          <h4 class="section-title mb-1">Recorded Purchases</h4>
-          <div class="mini-note">Sold players deducted from team wallets.</div>
+          <h4 class="section-title mb-1">Recorded Auction Purchases</h4>
+          <div class="mini-note">Actual purchases recorded and assigned to participant teams.</div>
         </div>
         <span class="chip">{{purchases|length}} sold</span>
       </div>
@@ -119,7 +216,7 @@
             </tr>
             {% else %}
             <tr>
-              <td colspan="4" class="empty">No sales recorded yet. Use the Record Sale form to record a purchase.</td>
+              <td colspan="4" class="empty">No sales recorded yet. Use the Record Auction Sale form to record a purchase.</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -127,12 +224,12 @@
       </div>
     </div>
 
-    <!-- REFERENCE LIST -->
+    <!-- REFERENCE LIST TABLE -->
     <div class="card p-4">
       <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
-          <h4 class="section-title mb-1">Reference Player List</h4>
-          <div class="mini-note">Players visible to all users on the landing page reference pool.</div>
+          <h4 class="section-title mb-1">Reference Player Pool</h4>
+          <div class="mini-note">Players visible to all visitors on the landing page reference pool.</div>
         </div>
         <span class="chip">{{ref_players|length}} reference players</span>
       </div>
