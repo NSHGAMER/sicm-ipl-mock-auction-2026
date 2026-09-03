@@ -1,1 +1,75 @@
-{% extends 'base.html' %}{% block content %}<section class="hero text-center"><span class="eyebrow"><span class="pulse"></span> Live physical auction • digital display</span><h1><span class="gradient-text">SICM</span><br>IPL MOCK AUCTION</h1><p>The official digital control and live information system for the SICM IPL Mock Auction. Bidding happens physically — the website keeps every team updated in real time.</p><div class="d-flex justify-content-center gap-2 flex-wrap mt-4"><a class="btn btn-primary btn-lg" href="{{url_for('register')}}">Register Team</a><a class="btn btn-ghost btn-lg" href="{{url_for('login')}}">Team Login</a></div></section>{% if state and state.is_live %}<div class="live-banner mb-4"><span class="live-dot"></span><strong>AUCTION LIVE</strong><span class="text-muted-custom ms-2">The auction is currently in progress.</span></div>{% endif %}<div class="d-flex justify-content-between align-items-end mb-3"><div><div class="eyebrow">Auction pool</div><h2 class="section-title mt-2">Players available today</h2></div><span class="chip">{{players|length}} players</span></div><div class="row g-3">{% for role in roles %}<div class="col-sm-6 col-lg-3"><div class="card role-card"><div class="role-icon">{% if role=='Batsman' %}🏏{% elif role=='Bowler' %}🎯{% elif role=='All-Rounder' %}⚡{% else %}🧤{% endif %}</div><h5 class="fw-bold">{{role}}</h5><div class="mini-note mb-2">Available for auction</div>{% for p in players if p.role==role and p.is_available %}<div class="player-mini"><span class="player-name">{{p.name}}</span><span class="chip">{{p.base_price|money}}</span></div>{% else %}<div class="empty px-0">No players added yet.</div>{% endfor %}</div></div>{% endfor %}</div><div class="card p-4 mt-4"><div class="d-flex flex-wrap justify-content-between align-items-center gap-3"><div><div class="eyebrow">10 teams</div><h4 class="fw-bold mt-2 mb-1">Ready for the bidding war?</h4><div class="mini-note">Register once for your team. The same credentials can be used for multiple logins.</div></div><a class="btn btn-primary" href="{{url_for('register')}}">Register your team →</a></div></div><div class="card p-4 mt-3"><h5 class="fw-bold mb-3">Admin Control Room</h5><form method="post" action="{{url_for('admin_login')}}" class="row g-2"><div class="col-md-5"><input name="username" class="form-control" placeholder="Admin username" required></div><div class="col-md-5"><input name="password" type="password" class="form-control" placeholder="Admin password" required></div><div class="col-md-2"><button class="btn btn-primary w-100">Enter Control Room</button></div></form></div>{% endblock %}
+{% extends 'base.html' %}
+{% block content %}
+<section class="hero text-center">
+  <span class="eyebrow"><span class="pulse"></span> Live physical auction • digital display</span>
+  <h1><span class="gradient-text">SICM</span><br>IPL MOCK AUCTION</h1>
+  <p>The official digital control and live information system for the SICM IPL Mock Auction. Bidding happens physically — the website keeps every team updated in real time.</p>
+  <div class="d-flex justify-content-center gap-2 flex-wrap mt-4">
+    <a class="btn btn-primary btn-lg" href="{{url_for('register')}}">Register Team</a>
+    <a class="btn btn-ghost btn-lg" href="{{url_for('login')}}">Team Login</a>
+  </div>
+</section>
+
+{% if state and state.is_live %}
+<div class="live-banner mb-4">
+  <span class="live-dot"></span><strong>AUCTION LIVE</strong>
+  <span class="text-muted-custom ms-2">The auction is currently in progress.</span>
+</div>
+{% endif %}
+
+<div class="d-flex justify-content-between align-items-end mb-3">
+  <div>
+    <div class="eyebrow">Auction pool</div>
+    <h2 class="section-title mt-2">Players available today</h2>
+  </div>
+  <span class="chip">{{players|length}} players</span>
+</div>
+
+<div class="row g-3">
+  {% for role in roles %}
+  <div class="col-sm-6 col-lg-3">
+    <div class="card role-card">
+      <div class="role-icon">
+        {% if role=='Batsman' %}🏏{% elif role=='Bowler' %}🎯{% elif role=='All-Rounder' %}⚡{% else %}🧤{% endif %}
+      </div>
+      <h5 class="fw-bold">{{role}}</h5>
+      <div class="mini-note mb-2">Available for auction</div>
+      {% for p in players if p.role==role %}
+      <div class="player-mini">
+        <span class="player-name">{{p.player_name or p.name}}</span>
+        <span class="chip">{{p.base_price|money}}</span>
+      </div>
+      {% else %}
+      <div class="empty px-0">No players added yet.</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card p-4 mt-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div>
+      <div class="eyebrow">10 teams</div>
+      <h4 class="fw-bold mt-2 mb-1">Ready for the bidding war?</h4>
+      <div class="mini-note">Register once for your team. The same credentials can be used for multiple logins.</div>
+    </div>
+    <a class="btn btn-primary" href="{{url_for('register')}}">Register your team →</a>
+  </div>
+</div>
+
+<div class="card p-4 mt-3">
+  <h5 class="fw-bold mb-3">Admin Control Room</h5>
+  <form method="post" action="{{url_for('admin_login')}}" class="row g-2">
+    <div class="col-md-5">
+      <input name="username" class="form-control" placeholder="Admin username" required>
+    </div>
+    <div class="col-md-5">
+      <input name="password" type="password" class="form-control" placeholder="Admin password" required>
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-primary w-100">Enter Control Room</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

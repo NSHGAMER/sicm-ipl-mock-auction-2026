@@ -1,6 +1,9 @@
 import os
+import io
+import csv
 import uuid
 import math
+import openpyxl
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from functools import wraps
@@ -44,6 +47,73 @@ def fmt_money(v):
     lakh = v / 100000
     return f'₹{lakh:.2f} L'
 app.jinja_env.filters['money'] = fmt_money
+
+
+def normalize_role(raw_role):
+    if not raw_role:
+        return None
+    r = str(raw_role).strip().lower().replace('-', ' ').replace('_', ' ')
+    if 'wicket' in r or 'keeper' in r or r in ('wk', 'wk batter', 'wk batsman', 'wicketkeeper', 'wicketkeeper batter'):
+        return 'Wicket Keeper'
+    elif 'all' in r or 'round' in r or r in ('ar', 'allrounder', 'all rounder'):
+        return 'All-Rounder'
+    elif 'bowl' in r or 'spinner' in r or 'pacer' in r:
+        return 'Bowler'
+    elif 'bat' in r or 'batter' in r or 'batsman' in r:
+        return 'Batsman'
+    return None
+
+
+def parse_base_price(raw_val):
+    if raw_val is None or str(raw_val).strip() == '':
+        return 20000000
+    if isinstance(raw_val, (int, float)):
+        val = float(raw_val)
+        if val <= 0:
+            raise ValueError('Base price must be positive.')
+        if val >= 100000:
+            return int(round(val))
+        return int(round(Decimal(str(raw_val)) * Decimal(10_000_000)))
+
+    s = str(raw_val).strip().replace('\u20b9', '').replace('₹', '').replace('Rs', '').replace('rs', '').replace(',', '').strip().lower()
+    if not s:
+        return 20000000
+
+    if 'cr' in s:
+        num = s.replace('crores', '').replace('crore', '').replace('cr', '').strip()
+        return int(round(Decimal(num) * Decimal(10_000_000)))
+    elif 'l' in s or 'lakh' in s or 'lac' in s:
+        num = s.replace('lakhs', '').replace('lakh', '').replace('lacs', '').replace('lac', '').replace('l', '').strip()
+        return int(round(Decimal(num) * Decimal(100_000)))
+    else:
+        val = float(s)
+        if val <= 0:
+            raise ValueError('Base price must be positive.')
+        if val >= 100000:
+            return int(round(val))
+        return int(round(Decimal(s) * Decimal(10_000_000)))
+
+
+def find_column_indices(header_row):
+    col_map = {}
+    for idx, cell in enumerate(header_row):
+        h = str(cell).strip().lower().replace('_', ' ').replace('-', ' ')
+        if 'name' in h or 'player' in h:
+            col_map['name'] = idx
+        elif 'role' in h or 'category' in h or 'pos' in h:
+            col_map['role'] = idx
+        elif 'team' in h or 'franchise' in h or 'ipl' in h:
+            col_map['team'] = idx
+        elif 'price' in h or 'base' in h:
+            col_map['base_price'] = idx
+
+    if 'name' not in col_map or 'role' not in col_map:
+        if len(header_row) >= 4:
+            return {'name': 0, 'role': 1, 'team': 2, 'base_price': 3}, False
+        elif len(header_row) >= 2:
+            return {'name': 0, 'role': 1, 'team': 2 if len(header_row) > 2 else None, 'base_price': 3 if len(header_row) > 3 else None}, False
+        raise ValueError("Could not find 'Player Name' and 'Role' columns.")
+    return col_map, True
 
 
 def participant_required(fn):
@@ -117,12 +187,13 @@ def get_admin_user_id():
 @app.get('/')
 def home():
     try:
-        players = supabase.table('players').select('id,name,role,nationality,base_price,photo_url,notes,is_available,auction_order').order('auction_order', desc=False).execute().data or []
+        players = supabase.table('auction_reference_players').select('id,player_name,role,team,base_price,auction_order').order('auction_order', desc=False).execute().data or []
         state_res = supabase.table('auction_state').select('is_live,current_player_id,updated_at').eq('id', True).single().execute()
         state = state_res.data if state_res else {'is_live': False, 'current_player_id': None}
     except Exception:
         players, state = [], {'is_live': False, 'current_player_id': None}
     return render_template('index.html', players=players, state=state, teams=TEAMS, roles=ROLES)
+
 
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -282,6 +353,16 @@ def dashboard():
             pl_res = supabase.table('players').select('id,name,role,nationality,base_price,photo_url,notes').eq('id', state['current_player_id']).limit(1).execute()
             if pl_res.data:
                 live_player = pl_res.data[0]
+            else:
+                ref_res = supabase.table('auction_reference_players').select('id,player_name,role,base_price').eq('id', state['current_player_id']).limit(1).execute()
+                if ref_res.data:
+                    live_player = {
+                        'id': ref_res.data[0]['id'],
+                        'name': ref_res.data[0]['player_name'],
+                        'role': ref_res.data[0]['role'],
+                        'nationality': None,
+                        'base_price': ref_res.data[0]['base_price']
+                    }
 
         dashboard_data = {
             'team': team_code,
@@ -319,74 +400,253 @@ def admin_login():
 @admin_required
 def admin_dashboard():
     try:
-        players = supabase.table('players').select('*').order('auction_order', desc=False).execute().data or []
         teams = supabase.table('teams').select('*').order('code').execute().data or []
+        ref_players = supabase.table('auction_reference_players').select('*').order('auction_order', desc=False).execute().data or []
+        purchases = supabase.table('purchases').select('id,player_id,team_id,sold_price,sold_at').order('sold_at', desc=True).execute().data or []
+
+        # Enrich purchases with team code and player name
+        teams_map = {t['id']: t for t in teams}
+        player_ids = [p['player_id'] for p in purchases if p.get('player_id')]
+        players_map = {}
+        if player_ids:
+            try:
+                p_res = supabase.table('players').select('id,name,role').in_('id', player_ids).execute()
+                players_map = {pl['id']: pl for pl in (p_res.data or [])}
+            except Exception:
+                pass
+
+        enriched_purchases = []
+        for p in purchases:
+            t_info = teams_map.get(p.get('team_id'), {})
+            pl_info = players_map.get(p.get('player_id'), {})
+            enriched_purchases.append({
+                'id': p['id'],
+                'player_name': pl_info.get('name', 'Unknown Player'),
+                'role': pl_info.get('role', ''),
+                'team_code': t_info.get('code', 'Unknown'),
+                'sold_price': p.get('sold_price', 0),
+                'sold_at': p.get('sold_at')
+            })
+
         participants = supabase.table('users').select('id,username,team_id,role,active,created_at').eq('role', 'participant').execute().data or []
         state_res = supabase.table('auction_state').select('*').eq('id', True).single().execute()
         state = state_res.data if state_res else {'id': True, 'is_live': False, 'current_player_id': None}
     except Exception:
-        players, teams, participants, state = [], [], [], {'id': True, 'is_live': False, 'current_player_id': None}
-    return render_template('admin.html', players=players, teams=teams, participants=participants, state=state, roles=ROLES, prices=PRICE_OPTIONS)
+        teams, ref_players, enriched_purchases, participants, state = [], [], [], [], {'id': True, 'is_live': False, 'current_player_id': None}
+    return render_template('admin.html', teams=teams, ref_players=ref_players, purchases=enriched_purchases, participants=participants, state=state, roles=ROLES)
 
 
+@app.post('/admin/reference/upload')
+@admin_required
+def upload_reference_list():
+    if 'file' not in request.files:
+        flash('No file selected.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    file = request.files['file']
+    if not file or not file.filename:
+        flash('No file selected.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    filename = file.filename.lower()
+    if not (filename.endswith('.xlsx') or filename.endswith('.csv')):
+        flash('Invalid file format. Please upload an Excel (.xlsx) or CSV (.csv) file.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    try:
+        raw_rows = []
+        if filename.endswith('.csv'):
+            content = file.read().decode('utf-8-sig', errors='replace')
+            reader = csv.reader(io.StringIO(content))
+            for r in reader:
+                if any(cell.strip() for cell in r if isinstance(cell, str)):
+                    raw_rows.append([str(c).strip() for c in r])
+        elif filename.endswith('.xlsx'):
+            wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
+            sheet = wb.active
+            for row in sheet.iter_rows(values_only=True):
+                if any(c is not None and str(c).strip() != '' for c in row):
+                    raw_rows.append([str(c).strip() if c is not None else '' for c in row])
+
+        if not raw_rows:
+            raise ValueError('Uploaded file is empty.')
+
+        header_row = raw_rows[0]
+        col_map, has_header = find_column_indices(header_row)
+        data_rows = raw_rows[1:] if has_header else raw_rows
+
+        if not data_rows:
+            raise ValueError('No player data found in file.')
+
+        parsed_players = []
+        for row_idx, r in enumerate(data_rows, start=(2 if has_header else 1)):
+            name_idx = col_map.get('name')
+            role_idx = col_map.get('role')
+            team_idx = col_map.get('team')
+            price_idx = col_map.get('base_price')
+
+            name = r[name_idx].strip() if name_idx is not None and name_idx < len(r) else ''
+            if not name:
+                continue
+
+            raw_role = r[role_idx].strip() if role_idx is not None and role_idx < len(r) else ''
+            role = normalize_role(raw_role)
+            if not role:
+                raise ValueError(f"Invalid role '{raw_role}' for player '{name}' at row {row_idx}. Must be Batsman, Bowler, All-Rounder, or Wicket Keeper.")
+
+            team = None
+            if team_idx is not None and team_idx < len(r):
+                raw_team = r[team_idx].strip().upper()
+                if raw_team:
+                    if raw_team in TEAMS:
+                        team = raw_team
+                    else:
+                        raise ValueError(f"Invalid team '{raw_team}' for player '{name}' at row {row_idx}. Must be one of {', '.join(TEAMS)} or left blank.")
+
+            raw_price = r[price_idx] if price_idx is not None and price_idx < len(r) else ''
+            base_price = parse_base_price(raw_price)
+
+            parsed_players.append({
+                'player_name': name,
+                'role': role,
+                'team': team,
+                'base_price': base_price,
+                'auction_order': len(parsed_players) + 1
+            })
+
+        if not parsed_players:
+            raise ValueError('No valid player rows found in file.')
+
+        # Only replace reference list after successful parsing
+        supabase.table('auction_reference_players').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+
+        batch_size = 50
+        for i in range(0, len(parsed_players), batch_size):
+            supabase.table('auction_reference_players').insert(parsed_players[i:i+batch_size]).execute()
+
+        flash(f'Successfully updated reference list with {len(parsed_players)} players.', 'success')
+    except Exception as e:
+        flash(f'Reference list upload failed: {str(e)}. Existing reference list was NOT changed.', 'danger')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.post('/admin/sale/manual')
 @app.post('/admin/player/add')
 @admin_required
-def add_player():
-    try:
-        name = request.form.get('name', '').strip()
-        role = request.form.get('role', '').strip()
-        nationality = request.form.get('nationality', '').strip() or None
+def manual_sale():
+    name = request.form.get('name', '').strip()
+    role = request.form.get('role', '').strip()
+    team = request.form.get('team', '').strip().upper()
+    raw_sold_price = (request.form.get('sold_price') or request.form.get('base_price') or '').strip()
 
+    try:
         if not name:
             raise ValueError('Player name is required.')
         if role not in ROLES:
             raise ValueError('Invalid player role.')
-
-        raw_price = (request.form.get('base_price') or request.form.get('base_price_crore') or '').strip()
-        if not raw_price:
-            raise ValueError('Base price is required.')
+        if team not in TEAMS:
+            raise ValueError('Please select a valid purchasing team.')
+        if not raw_sold_price:
+            raise ValueError('Sold price is required.')
 
         try:
-            crore_val = float(raw_price)
+            crore_val = float(raw_sold_price)
         except (ValueError, TypeError):
-            raise ValueError('Base price must be a valid number.')
+            raise ValueError('Sold price must be a valid number.')
 
-        if math.isnan(crore_val) or math.isinf(crore_val):
-            raise ValueError('Invalid base price value.')
-        if crore_val <= 0:
-            raise ValueError('Base price must be greater than 0 Cr.')
+        if math.isnan(crore_val) or math.isinf(crore_val) or crore_val <= 0:
+            raise ValueError('Sold price must be greater than 0 Cr.')
         if crore_val > 100:
-            raise ValueError('Base price cannot exceed 100 Cr.')
+            raise ValueError('Sold price cannot exceed 100 Cr.')
 
         try:
-            base_price_rupees = int(round(Decimal(raw_price) * Decimal(10_000_000)))
+            sold_price_rupees = int(round(Decimal(raw_sold_price) * Decimal(10_000_000)))
         except (InvalidOperation, ValueError):
-            base_price_rupees = int(round(crore_val * 10_000_000))
+            sold_price_rupees = int(round(crore_val * 10_000_000))
 
-        if base_price_rupees <= 0:
-            raise ValueError('Base price in rupees must be greater than 0.')
+        if sold_price_rupees <= 0:
+            raise ValueError('Sold price must be greater than 0.')
 
-        # Automatically assign MAX(auction_order) + 1, or 1 if no players
+        # 1. Create the actual player record in public.players
         order_res = supabase.table('players').select('auction_order').order('auction_order', desc=True).limit(1).execute()
         if order_res.data and len(order_res.data) > 0 and order_res.data[0].get('auction_order') is not None:
             next_order = int(order_res.data[0]['auction_order']) + 1
         else:
             next_order = 1
 
-        payload = {
+        player_payload = {
             'name': name,
             'role': role,
-            'nationality': nationality,
-            'base_price': base_price_rupees,
+            'nationality': None,
+            'base_price': sold_price_rupees,
             'photo_url': None,
             'notes': None,
             'auction_order': next_order,
             'is_available': True
         }
-        supabase.table('players').insert(payload).execute()
-        flash('Player added.', 'success')
+        player_res = supabase.table('players').insert(player_payload).execute()
+        if not player_res.data:
+            raise Exception('Failed to create player record.')
+        player_id = player_res.data[0]['id']
+
+        # 2. Call existing mark_player_sold RPC
+        admin_id = session.get('user_id')
+        try:
+            uuid.UUID(str(admin_id))
+            u_chk = supabase.table('users').select('id').eq('id', str(admin_id)).execute()
+            if not u_chk.data:
+                admin_id = get_admin_user_id()
+                session['user_id'] = admin_id
+        except Exception:
+            admin_id = get_admin_user_id()
+            session['user_id'] = admin_id
+
+        request_id = str(uuid.uuid4())
+
+        try:
+            supabase.rpc('mark_player_sold', {
+                'p_player_id': player_id,
+                'p_team': team,
+                'p_sold_price': sold_price_rupees,
+                'p_recorded_by': admin_id,
+                'p_request_id': request_id
+            }).execute()
+        except Exception as rpc_err:
+            # Clean up the un-sold player record on failure
+            try:
+                supabase.table('players').delete().eq('id', player_id).execute()
+            except Exception:
+                pass
+            raise rpc_err
+
+        # Clear live player if needed
+        try:
+            state_res = supabase.table('auction_state').select('current_player_id').eq('id', True).single().execute()
+            if state_res.data and state_res.data.get('current_player_id') == player_id:
+                now_ts = datetime.now(timezone.utc).isoformat()
+                supabase.table('auction_state').update({
+                    'current_player_id': None,
+                    'is_live': False,
+                    'updated_at': now_ts
+                }).eq('id', True).execute()
+        except Exception:
+            pass
+
+        flash(f"SOLD — {name} to {team} for {fmt_money(sold_price_rupees)}", 'success')
     except Exception as e:
-        flash(safe_error(e), 'danger')
+        err = safe_error(e)
+        if err == 'LOW_BALANCE':
+            flash(f'LOW BALANCE — {team} does not have enough wallet funds for {fmt_money(sold_price_rupees)}.', 'danger')
+        elif err == 'SQUAD_FULL':
+            flash(f'SQUAD FULL — {team} already has the maximum 12 players.', 'danger')
+        elif err == 'ALREADY_SOLD':
+            flash('This player has already been sold.', 'danger')
+        elif err == 'PLAYER_NOT_FOUND':
+            flash('Player not found in database.', 'danger')
+        elif err == 'INVALID_PRICE':
+            flash('Invalid sale price.', 'danger')
+        else:
+            flash(f'Error recording sale: {err}', 'danger')
     return redirect(url_for('admin_dashboard'))
 
 
@@ -394,21 +654,42 @@ def add_player():
 @admin_required
 def set_live(player_id):
     try:
-        p_res = supabase.table('players').select('id,name,is_available').eq('id', player_id).single().execute()
-        if not p_res.data:
-            flash('Player not found.', 'danger')
-            return redirect(url_for('admin_dashboard'))
-        if not p_res.data.get('is_available', False):
-            flash('Cannot set sold player as live.', 'warning')
-            return redirect(url_for('admin_dashboard'))
+        p_res = supabase.table('players').select('id,name,is_available').eq('id', player_id).execute()
+        target_id = player_id
+        pl_name = 'Player'
+        if p_res.data:
+            pl_name = p_res.data[0].get('name', 'Player')
+            if not p_res.data[0].get('is_available', False):
+                flash('Cannot set sold player as live.', 'warning')
+                return redirect(url_for('admin_dashboard'))
+        else:
+            ref_res = supabase.table('auction_reference_players').select('*').eq('id', player_id).execute()
+            if ref_res.data:
+                ref_p = ref_res.data[0]
+                pl_name = ref_p.get('player_name', 'Player')
+                existing_pl = supabase.table('players').select('id,is_available').eq('name', pl_name).execute()
+                if existing_pl.data and existing_pl.data[0].get('is_available'):
+                    target_id = existing_pl.data[0]['id']
+                else:
+                    new_pl = supabase.table('players').insert({
+                        'name': pl_name,
+                        'role': ref_p.get('role', 'Batsman'),
+                        'base_price': ref_p.get('base_price', 20000000),
+                        'is_available': True
+                    }).execute()
+                    if new_pl.data:
+                        target_id = new_pl.data[0]['id']
+            else:
+                flash('Player not found.', 'danger')
+                return redirect(url_for('admin_dashboard'))
 
         now_ts = datetime.now(timezone.utc).isoformat()
         supabase.table('auction_state').update({
-            'current_player_id': player_id,
+            'current_player_id': target_id,
             'is_live': True,
             'updated_at': now_ts
         }).eq('id', True).execute()
-        flash(f"{p_res.data.get('name', 'Player')} is now LIVE.", 'success')
+        flash(f"{pl_name} is now LIVE.", 'success')
     except Exception as e:
         flash(f'Failed to set live player: {safe_error(e)}', 'danger')
     return redirect(url_for('admin_dashboard'))
@@ -430,14 +711,16 @@ def sold(player_id):
         admin_id = session.get('user_id')
         try:
             uuid.UUID(str(admin_id))
-        except (ValueError, TypeError):
+            u_chk = supabase.table('users').select('id').eq('id', str(admin_id)).execute()
+            if not u_chk.data:
+                admin_id = get_admin_user_id()
+                session['user_id'] = admin_id
+        except Exception:
             admin_id = get_admin_user_id()
             session['user_id'] = admin_id
 
         request_id = str(uuid.uuid4())
 
-        # PostgreSQL function:
-        # mark_player_sold(p_player_id uuid, p_team team_code, p_sold_price bigint, p_recorded_by uuid, p_request_id uuid)
         result = supabase.rpc('mark_player_sold', {
             'p_player_id': player_id,
             'p_team': team,
@@ -510,6 +793,7 @@ def stop_live():
     except Exception as e:
         flash(f'Failed to stop live display: {safe_error(e)}', 'danger')
     return redirect(url_for('admin_dashboard'))
+
 
 
 @app.get('/health')
