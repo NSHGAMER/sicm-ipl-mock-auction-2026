@@ -51,17 +51,17 @@ app.jinja_env.filters['money'] = fmt_money
 
 def normalize_role(raw_role):
     if not raw_role:
-        return None
-    r = str(raw_role).strip().lower().replace('-', ' ').replace('_', ' ')
-    if 'wicket' in r or 'keeper' in r or r in ('wk', 'wk batter', 'wk batsman', 'wicketkeeper', 'wicketkeeper batter'):
-        return 'Wicket Keeper'
-    elif 'all' in r or 'round' in r or r in ('ar', 'allrounder', 'all rounder'):
-        return 'All-Rounder'
-    elif 'bowl' in r or 'spinner' in r or 'pacer' in r:
-        return 'Bowler'
-    elif 'bat' in r or 'batter' in r or 'batsman' in r:
         return 'Batsman'
-    return None
+    r = str(raw_role).strip().lower().replace('-', ' ').replace('_', ' ')
+    if 'wicket' in r or 'keeper' in r or 'wk' in r:
+        return 'Wicket Keeper'
+    if 'all' in r and 'round' in r:
+        return 'All-Rounder'
+    if 'spin' in r or 'fast' in r or 'medium' in r or 'bowl' in r or 'arm' in r or 'break' in r or 'orthodox' in r or 'seam' in r or 'pacer' in r:
+        return 'Bowler'
+    if 'bat' in r or 'batter' in r or 'batsman' in r or 'finisher' in r or 'opener' in r:
+        return 'Batsman'
+    return 'Batsman'
 
 
 def parse_base_price(raw_val):
@@ -70,7 +70,7 @@ def parse_base_price(raw_val):
     if isinstance(raw_val, (int, float)):
         val = float(raw_val)
         if val <= 0:
-            raise ValueError('Base price must be positive.')
+            return 20000000
         if val >= 100000:
             return int(round(val))
         return int(round(Decimal(str(raw_val)) * Decimal(10_000_000)))
@@ -81,39 +81,119 @@ def parse_base_price(raw_val):
 
     if 'cr' in s:
         num = s.replace('crores', '').replace('crore', '').replace('cr', '').strip()
-        return int(round(Decimal(num) * Decimal(10_000_000)))
+        try:
+            return int(round(Decimal(num) * Decimal(10_000_000)))
+        except Exception:
+            return 20000000
     elif 'l' in s or 'lakh' in s or 'lac' in s:
         num = s.replace('lakhs', '').replace('lakh', '').replace('lacs', '').replace('lac', '').replace('l', '').strip()
-        return int(round(Decimal(num) * Decimal(100_000)))
+        try:
+            return int(round(Decimal(num) * Decimal(100_000)))
+        except Exception:
+            return 20000000
     else:
-        val = float(s)
-        if val <= 0:
-            raise ValueError('Base price must be positive.')
-        if val >= 100000:
-            return int(round(val))
-        return int(round(Decimal(s) * Decimal(10_000_000)))
+        try:
+            val = float(s)
+            if val <= 0:
+                return 20000000
+            if val >= 100000:
+                return int(round(val))
+            return int(round(Decimal(s) * Decimal(10_000_000)))
+        except Exception:
+            return 20000000
 
 
-def find_column_indices(header_row):
-    col_map = {}
-    for idx, cell in enumerate(header_row):
-        h = str(cell).strip().lower().replace('_', ' ').replace('-', ' ')
-        if 'name' in h or 'player' in h:
-            col_map['name'] = idx
-        elif 'role' in h or 'category' in h or 'pos' in h:
-            col_map['role'] = idx
-        elif 'team' in h or 'franchise' in h or 'ipl' in h:
-            col_map['team'] = idx
-        elif 'price' in h or 'base' in h:
-            col_map['base_price'] = idx
+def parse_reference_file(file_storage):
+    filename = file_storage.filename.lower()
+    raw_rows = []
+    if filename.endswith('.csv'):
+        content = file_storage.read().decode('utf-8-sig', errors='replace')
+        reader = csv.reader(io.StringIO(content))
+        for r in reader:
+            if any(cell.strip() for cell in r if isinstance(cell, str)):
+                raw_rows.append([str(c).strip() for c in r])
+    elif filename.endswith('.xlsx'):
+        wb = openpyxl.load_workbook(io.BytesIO(file_storage.read()), data_only=True)
+        sheet = wb.active
+        for row in sheet.iter_rows(values_only=True):
+            if any(c is not None and str(c).strip() != '' for c in row):
+                raw_rows.append([str(c).strip() if c is not None else '' for c in row])
 
-    if 'name' not in col_map or 'role' not in col_map:
-        if len(header_row) >= 4:
-            return {'name': 0, 'role': 1, 'team': 2, 'base_price': 3}, False
-        elif len(header_row) >= 2:
-            return {'name': 0, 'role': 1, 'team': 2 if len(header_row) > 2 else None, 'base_price': 3 if len(header_row) > 3 else None}, False
-        raise ValueError("Could not find 'Player Name' and 'Role' columns.")
-    return col_map, True
+    if not raw_rows:
+        raise ValueError('Uploaded file is empty.')
+
+    parsed_players = []
+    current_col_map = {}
+
+    for row_idx, r in enumerate(raw_rows, start=1):
+        if not r or not any(cell for cell in r):
+            continue
+
+        first_cell = r[0].strip().lower() if len(r) > 0 else ''
+        potential_map = {}
+        for idx, cell in enumerate(r):
+            h = str(cell).strip().lower().replace('_', ' ').replace('-', ' ')
+            if 'name' in h or 'player' in h:
+                potential_map['name'] = idx
+            elif 'role' in h or 'profile' in h or 'style' in h or 'category' in h or 'pos' in h:
+                potential_map['role'] = idx
+            elif 'country' in h or 'nationality' in h:
+                potential_map['nationality'] = idx
+            elif 'team' in h or 'franchise' in h or 'ipl' in h:
+                potential_map['team'] = idx
+            elif 'price' in h or 'base' in h:
+                potential_map['base_price'] = idx
+
+        if 'name' in potential_map and ('role' in potential_map or 'base_price' in potential_map):
+            current_col_map = potential_map
+            continue
+
+        if first_cell in ('s.no', 's. no', 'sno', 'sl.no', 'sl no', 'player name', 'name', 's #'):
+            if 'name' in potential_map:
+                current_col_map = potential_map
+            continue
+
+        if not current_col_map:
+            if len(r) >= 4:
+                current_col_map = {'name': 1 if len(r) > 1 and r[0].isdigit() else 0, 'role': 3 if len(r) > 3 and r[0].isdigit() else 1, 'team': 2, 'base_price': len(r) - 1}
+            elif len(r) >= 2:
+                current_col_map = {'name': 0, 'role': 1, 'team': 2 if len(r) > 2 else None, 'base_price': 3 if len(r) > 3 else None}
+
+        name_idx = current_col_map.get('name')
+        if name_idx is None or name_idx >= len(r):
+            continue
+
+        name = r[name_idx].strip()
+        if not name or name.lower() in ('player name', 'name', 's.no', 'sno', 's. no'):
+            continue
+
+        role_idx = current_col_map.get('role')
+        raw_role = r[role_idx].strip() if role_idx is not None and role_idx < len(r) else ''
+        role = normalize_role(raw_role)
+
+        team = None
+        team_idx = current_col_map.get('team')
+        if team_idx is not None and team_idx < len(r):
+            raw_team = r[team_idx].strip().upper()
+            if raw_team in TEAMS:
+                team = raw_team
+
+        price_idx = current_col_map.get('base_price')
+        raw_price = r[price_idx] if price_idx is not None and price_idx < len(r) else None
+        base_price = parse_base_price(raw_price)
+
+        parsed_players.append({
+            'player_name': name,
+            'role': role,
+            'team': team,
+            'base_price': base_price,
+            'auction_order': len(parsed_players) + 1
+        })
+
+    if not parsed_players:
+        raise ValueError('Player Name and Role columns are required.')
+
+    return parsed_players
 
 
 def participant_required(fn):
@@ -455,68 +535,7 @@ def upload_reference_list():
         return redirect(url_for('admin_dashboard'))
 
     try:
-        raw_rows = []
-        if filename.endswith('.csv'):
-            content = file.read().decode('utf-8-sig', errors='replace')
-            reader = csv.reader(io.StringIO(content))
-            for r in reader:
-                if any(cell.strip() for cell in r if isinstance(cell, str)):
-                    raw_rows.append([str(c).strip() for c in r])
-        elif filename.endswith('.xlsx'):
-            wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
-            sheet = wb.active
-            for row in sheet.iter_rows(values_only=True):
-                if any(c is not None and str(c).strip() != '' for c in row):
-                    raw_rows.append([str(c).strip() if c is not None else '' for c in row])
-
-        if not raw_rows:
-            raise ValueError('Uploaded file is empty.')
-
-        header_row = raw_rows[0]
-        col_map, has_header = find_column_indices(header_row)
-        data_rows = raw_rows[1:] if has_header else raw_rows
-
-        if not data_rows:
-            raise ValueError('No player data found in file.')
-
-        parsed_players = []
-        for row_idx, r in enumerate(data_rows, start=(2 if has_header else 1)):
-            name_idx = col_map.get('name')
-            role_idx = col_map.get('role')
-            team_idx = col_map.get('team')
-            price_idx = col_map.get('base_price')
-
-            name = r[name_idx].strip() if name_idx is not None and name_idx < len(r) else ''
-            if not name:
-                continue
-
-            raw_role = r[role_idx].strip() if role_idx is not None and role_idx < len(r) else ''
-            role = normalize_role(raw_role)
-            if not role:
-                raise ValueError(f"Invalid role '{raw_role}' for player '{name}' at row {row_idx}. Must be Batsman, Bowler, All-Rounder, or Wicket Keeper.")
-
-            team = None
-            if team_idx is not None and team_idx < len(r):
-                raw_team = r[team_idx].strip().upper()
-                if raw_team:
-                    if raw_team in TEAMS:
-                        team = raw_team
-                    else:
-                        raise ValueError(f"Invalid team '{raw_team}' for player '{name}' at row {row_idx}. Must be one of {', '.join(TEAMS)} or left blank.")
-
-            raw_price = r[price_idx] if price_idx is not None and price_idx < len(r) else ''
-            base_price = parse_base_price(raw_price)
-
-            parsed_players.append({
-                'player_name': name,
-                'role': role,
-                'team': team,
-                'base_price': base_price,
-                'auction_order': len(parsed_players) + 1
-            })
-
-        if not parsed_players:
-            raise ValueError('No valid player rows found in file.')
+        parsed_players = parse_reference_file(file)
 
         # Only replace reference list after successful parsing
         supabase.table('auction_reference_players').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
